@@ -1,6 +1,5 @@
 # Transdisciplinary Nature Conservation: the IUCN Red List of Threatened Species from evaluation to practice
 
-# Program:
 
 ## Morning (9:00 - 12:30)
 - Theoretical introduction
