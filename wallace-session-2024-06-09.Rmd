@@ -1,0 +1,249 @@
+Wallace Session 2024-06-09
+================
+
+Please find below the R code history from your *Wallace* v2.1.1 session.
+
+You can reproduce your session results by running this R Markdown file
+in RStudio.
+
+Each code block is called a “chunk”, and you can run them either
+one-by-one or all at once by choosing an option in the “Run” menu at the
+top-right corner of the “Source” pane in RStudio.
+
+For more detailed information see <http://rmarkdown.rstudio.com>).
+
+### Package installation
+
+Wallace uses the following R packages that must be installed and loaded
+before starting.
+
+```{r}
+library(spocc)
+library(spThin)
+library(dismo)
+library(sf)
+library(ENMeval)
+library(wallace)
+```
+
+The *Wallace* session code .Rmd file is composed of a chain of module
+functions that are internal to *Wallace*. Each of these functions
+corresponds to a single module that the user ran during the session. To
+see the internal code for these module functions, click on the links in
+the .Rmd file. Users are encouraged to write custom code in the .Rmd
+directly to modify their analysis, and even modify the module function
+code to further customize. To see the source code for any module
+function, just type its name into the R console and press Return.
+
+```{r}
+# example:
+# just type the function name and press Return to see its source code
+# paste this code into a new script to edit it
+occs_queryDb
+```
+
+Your analyses are below.
+
+------------------------------------------------------------------------
+
+## Analysis for *Vulpes vulpes* (Vv)
+
+### Obtain Occurrence Data
+
+You searched the gbif database for *Vulpes vulpes*, limited to 1000
+records. You decided to remove occurrences without uncertainty
+information? TRUE
+
+```{r}
+# Query selected database for occurrence records
+queryDb_Vv <- occs_queryDb(
+  spNames = "Vulpes vulpes", 
+  occDb = "gbif", 
+  occNum = 1000,
+  RmUncertain = TRUE)
+occs_Vv <- queryDb_Vv$Vulpes_vulpes$cleaned
+```
+
+### Obtain environmental data
+
+Using Ecoclimate (<http://www.ecoclimate.org>) dataset at resolution of
+0.5 degrees.
+
+```{r}
+# R code to get environmental data from Ecoclimate
+envs_Vv <- envs_ecoClimate(
+  bcAOGCM = "CCSM",
+  bcScenario = "Present",
+  ecoClimSel = c(1, 3, 4, 6, 15)) 
+##Add envrionmental values to occurrences table
+occs_xy_Vv <- occs_Vv[c('longitude', 'latitude')]
+occs_vals_Vv <- as.data.frame(raster::extract(envs_Vv, occs_xy_Vv, cellnumbers = TRUE))
+# Remove duplicated same cell values
+occs_Vv <- occs_Vv[!duplicated(occs_vals_Vv[, 1]), ]
+occs_vals_Vv <- occs_vals_Vv[!duplicated(occs_vals_Vv[, 1]), -1]
+# remove occurrence records with NA environmental values
+occs_Vv <- occs_Vv[!(rowSums(is.na(occs_vals_Vv)) >= 1), ]
+# also remove variable value rows with NA environmental values
+occs_vals_Vv <- na.omit(occs_vals_Vv)
+# add columns for env variable values for each occurrence record
+occs_Vv <- cbind(occs_Vv, occs_vals_Vv)
+```
+
+### Process Occurrence Data
+
+Remove occurrences outside of user drawn polygon
+
+```{r}
+occs_Vv <- poccs_selectOccs(
+  occs = occs_Vv,
+  polySelXY = matrix(c(-141.322632, -122.689819, 62.232056, 143.442993, 165.591431, 121.294556, -66.439819, -126.205444, -141.322632, 39.368279, 67.609221, 70.140364, 57.704147, 40.446947, 12.554564, 21.289374, 18.312811, 39.368279), ncol = 2, byrow = FALSE),
+  polySelID = 5038)
+```
+
+### Process environmental data
+
+Sampling of 1000 background points and corresponding environmental data
+using a “point buffers” method with a 20 degree buffer.
+
+```{r}
+# Generate background extent 
+bgExt_Vv <- penvs_bgExtent(
+  occs = occs_Vv,
+  bgSel = "point buffers",
+  bgBuf = 20)
+# Mask environmental data to provided extent
+bgMask_Vv <- penvs_bgMask(
+  occs = occs_Vv,
+  envs = envs_Vv,
+  bgExt = bgExt_Vv)
+# Sample background points from the provided area
+bgSample_Vv <- penvs_bgSample(
+  occs = occs_Vv,
+  bgMask =  bgMask_Vv,
+  bgPtsNum = 1000)
+# Extract values of environmental layers for each background point
+bgEnvsVals_Vv <- as.data.frame(raster::extract(bgMask_Vv,  bgSample_Vv))
+##Add extracted values to background points table
+bgEnvsVals_Vv <- cbind(scientific_name = paste0("bg_", "Vulpes vulpes"), bgSample_Vv,
+                            occID = NA, year = NA, institution_code = NA, country = NA,
+                            state_province = NA, locality = NA, elevation = NA,
+                            record_type = NA, bgEnvsVals_Vv)
+```
+
+### Partition occurrence data
+
+Partition occurrences and background points for model training and
+validation using random k-fold, a non-spatial partition method.
+
+```{r}
+# R code to get partitioned data
+groups_Vv <- part_partitionOccs(
+  occs = occs_Vv ,
+  bg =  bgSample_Vv, 
+  method = "rand",
+  kfolds = 4) 
+```
+
+### Build and Evaluate Niche Model
+
+Generating a species distribution model using the maxnet algorithm as
+implemented in ENMeval V2.0 (with clamping = FALSE). For tuning using L,
+LQH feature classes and regularization multipliers in the 1, 4 range
+increasing by 3. Not using any categorical predictor variables.
+
+```{r}
+# Run maxent model for the selected species
+model_Vv <- model_maxent(
+  occs = occs_Vv,
+  bg = bgEnvsVals_Vv,
+  user.grp = groups_Vv, 
+  bgMsk = bgMask_Vv,
+  rms = c(1, 4), 
+  rmsStep =  3,
+  fcs = c('L', 'LQH'),
+  clampSel = FALSE,
+  algMaxent = "maxnet",
+  parallel = TRUE,
+  numCores = 6)
+```
+
+### Visualize
+
+Generate a map of the maxnet generated model with no threshold
+
+```{r}
+# Select current model and obtain raster prediction
+m_Vv <- model_Vv@models[["fc.LQH_rm.4"]]
+predSel_Vv <- predictMaxnet(m_Vv, bgMask_Vv,
+                                          type = "cloglog", 
+                                          clamp = FALSE)
+#Get values of prediction
+mapPredVals_Vv <- getRasterVals(predSel_Vv, "cloglog")
+#Define colors and legend  
+rasCols <- c("#2c7bb6", "#abd9e9", "#ffffbf", "#fdae61", "#d7191c")
+legendPal <- colorNumeric(rev(rasCols), mapPredVals_Vv, na.color = 'transparent')
+rasPal <- colorNumeric(rasCols, mapPredVals_Vv, na.color = 'transparent')
+#Generate map
+m <- leaflet() %>% addProviderTiles(providers$Esri.WorldTopoMap) 
+m  %>%
+  leaflet::addLegend("bottomright", pal = legendPal,
+            title = "Predicted Suitability<br>(Training)",
+            values = mapPredVals_Vv, layerId = "train",
+            labFormat = reverseLabel(2, reverse_order = TRUE)) %>% 
+  #add occurrence data
+  addCircleMarkers(data = occs_Vv, lat = ~latitude, lng = ~longitude,
+                   radius = 5, color = 'red', fill = TRUE, fillColor = "red",
+                   fillOpacity = 0.2, weight = 2, popup = ~pop) %>% 
+  ##Add model prediction
+  addRasterImage(predSel_Vv, colors = rasPal, opacity = 0.7,
+                 group = 'vis', layerId = 'mapPred', method = "ngb") %>%
+ ##add background polygons
+  addPolygons(data = bgExt_Vv,fill = FALSE,
+              weight = 4, color = "blue", group = 'proj')
+```
+
+```{r}
+# First must generate the transfer area according to the drawn polygon in the GUI
+xfer_draw_Vv <-xfer_draw(
+  polyXfXY = matrix(c(-170.848389, -168.739014, 179.307861, 192.667236, -116.707764, -116.707764, -170.848389, 86.031103, -77.915669, -77.157163, 85.831591, 85.982137, 85.982137, 86.031103),ncol=2,byrow=FALSE),
+  polyXfID = 29033,
+  drawXfBuf = 0)
+# Create object of transfer variables
+xferAreaEnvs_Vv <- envs_Vv
+# Generate a transfer of the model to the desired area
+xfer_area_Vv <- xfer_area(
+  evalOut = model_Vv,
+  curModel = "fc.LQH_rm.4",
+  envs = xferAreaEnvs_Vv , 
+  outputType = "cloglog",
+  alg = "maxnet",
+  clamp = FALSE,
+  xfExt = xfer_draw_Vv) 
+# store the cropped transfer variables
+xferExt_Vv <- xfer_area_Vv$xferExt
+ #map result
+ 
+ ###Make map of transfer
+bb_Vv <-  bgExt_Vv@bbox
+bbZoom <- polyZoom(bb_Vv[1, 1], bb_Vv[2, 1], bb_Vv[1, 2], 
+                   bb_Vv[2, 2], fraction = 0.05)
+mapXferVals_Vv <- getRasterVals(xfer_area_Vv$xferArea,"cloglog")
+rasCols_Vv <- c("#2c7bb6", "#abd9e9", "#ffffbf", "#fdae61", "#d7191c")
+# if no threshold specified
+legendPal <- colorNumeric(rev(rasCols_Vv), mapXferVals_Vv, na.color = 'transparent')
+rasPal_Vv <- colorNumeric(rasCols_Vv, mapXferVals_Vv, na.color = 'transparent')
+m <- leaflet() %>% addProviderTiles(providers$Esri.WorldTopoMap) 
+m %>%
+  fitBounds(bbZoom[1], bbZoom[2], bbZoom[3], bbZoom[4]) %>%
+  leaflet::addLegend("bottomright", pal = legendPal,
+            title = "Predicted Suitability<br>(Transferred)",
+            values = mapXferVals_Vv, layerId = 'xfer',
+            labFormat = reverseLabel(2, reverse_order = TRUE)) %>%
+# map model prediction raster and transfer polygon
+  clearMarkers() %>% clearShapes() %>% removeImage('xferRas') %>%
+  addRasterImage(xfer_area_Vv$xferArea, colors = rasPal_Vv, opacity = 0.7,
+                 layerId = 'xferRas', group = 'xfer', method = "ngb") %>%
+ ##add transfer polygon (user drawn area)
+  addPolygons(data = xfer_draw_Vv, fill = FALSE,
+              weight = 4, color = "blue", group = 'xfer')
+```
