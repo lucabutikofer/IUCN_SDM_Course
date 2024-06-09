@@ -15,3 +15,6 @@ This will get Wallace to boot in a browser window. Your computer should now be r
 ## Slides
 
 You can find the slides for the Wallace tutorial [here](https://docs.google.com/presentation/d/1ky_UpGmxQNnliMhA5fXP3zr5JMjpmi_S/edit?usp=share_link&ouid=114622145389882431742&rtpof=true&sd=true).
+
+---
+[Ecospat - Spatial Ecology Group](https://www.unil.ch/ecospat/en/home.html)
